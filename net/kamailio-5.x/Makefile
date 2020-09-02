@@ -9,20 +9,21 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=kamailio5
-PKG_VERSION:=5.3.3
+PKG_VERSION:=5.4.0
 PKG_RELEASE:=1
 
 PKG_SOURCE_URL:=https://www.kamailio.org/pub/kamailio/$(PKG_VERSION)/src
 PKG_SOURCE:=kamailio-$(PKG_VERSION)$(PKG_VARIANT)_src.tar.gz
-PKG_HASH:=2443f8aad3584b009b51948dc41982060b9ffc76be8016aa4e7de25b83be5b0a
+PKG_HASH:=9ee22d566a7b6f60eaf283e95ee6633046dc87117be03b6cf2bc27293087718b
 PKG_USE_MIPS16:=0
 
 PKG_LICENSE:=GPL-2.0+
 PKG_LICENSE_FILES:=COPYING
 PKG_MAINTAINER:=Jiri Slachta <jiri@slachta.eu>
 
-# Defining PKG_BUILD_PARALLEL to 1 would be a noop due to the way we call make
-#PKG_BUILD_PARALLEL:=1
+PKG_INSTALL:=1
+
+PKG_BUILD_PARALLEL:=1
 
 MODULES_AVAILABLE:= \
 	acc \
@@ -32,6 +33,7 @@ MODULES_AVAILABLE:= \
 	app_jsdt \
 	app_lua \
 	app_lua_sr \
+	app_python3 \
 	app_ruby \
 	app_sqlang \
 	async \
@@ -76,6 +78,7 @@ MODULES_AVAILABLE:= \
 	dialplan \
 	dispatcher \
 	diversion \
+	dlgs \
 	dmq \
 	dmq_usrloc \
 	domain \
@@ -155,6 +158,7 @@ MODULES_AVAILABLE:= \
 	pua_usrloc \
 	pua_xmpp \
 	pv \
+	pv_headers \
 	qos \
 	ratelimit \
 	regex \
@@ -230,6 +234,7 @@ PKG_CONFIG_DEPENDS:= \
 
 include $(INCLUDE_DIR)/nls.mk
 include $(INCLUDE_DIR)/package.mk
+include $(TOPDIR)/feeds/packages/lang/python/python3-version.mk
 
 # Build reproducibly
 TARGET_CFLAGS += -DVERSION_NODATE=1
@@ -269,7 +274,7 @@ $(foreach c,kamailio.cfg kamctlrc,$(call Package/kamailio5/install/conffile,$(1)
 		$(1)/usr/sbin/
 	$(INSTALL_DIR) $(1)/usr/lib/kamailio/modules
 	$(CP) \
-		$(PKG_INSTALL_DIR)/usr/lib/kamailio/lib{srdb1,srdb2,srutils}.so* \
+		$(PKG_INSTALL_DIR)/usr/lib/kamailio/lib{srdb1,srdb2}.so* \
 		$(1)/usr/lib/kamailio/
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) \
@@ -304,7 +309,7 @@ endef
 
 define Package/kamailio5/install/conffile
 	$(INSTALL_DIR) $(1)/etc/kamailio
-	$(INSTALL_CONF) $(PKG_INSTALL_DIR)/etc/kamailio/$(2) $(1)/etc/kamailio
+	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/etc/kamailio/$(2) $(1)/etc/kamailio
 endef
 
 define Package/kamailio5/install/dbfiles
@@ -388,9 +393,6 @@ endef
 #   "ims_diameter_server" -> libkamailio_ims
 #   "carrierroute" -> libtrie
 
-# "lib_target" is specified in order for the modules to get a proper
-# RPATH, as otherwise they would not find the internal libraries.
-
 EXTRA_MODULES:= \
 	$(if $(CONFIG_PACKAGE_kamailio5-mod-carrierroute),,carrierroute) \
 	$(if $(CONFIG_PACKAGE_kamailio5-mod-ims-diameter-server),,ims_diameter_server) \
@@ -408,35 +410,36 @@ ifeq ($(call qstrip,$(CONFIG_ARCH)),mips)
 CPU_MIPS2:=mips32 24kc 34kc 74kc
 endif
 
-PKG_MAKE_ARGS:= \
-	prefix=/ \
-	cfg_dir=/etc/kamailio/ \
-	bin_dir=/usr/sbin/ \
-	data_dir=/usr/share/kamailio/ \
-	lib_dir=/usr/lib/kamailio/ \
-	modules_dir=/usr/lib/kamailio/ \
+MAKE_FLAGS += \
+	$(if $(findstring $(call qstrip,$(CONFIG_CPU_TYPE)),$(CPU_MIPS2)),ARCH="mips2",ARCH="$(ARCH)") \
+	CC_EXTRA_OPTS="$(TARGET_CFLAGS) $(TARGET_CPPFLAGS)" \
+	LD="$(TARGET_CC)" \
+	LD_EXTRA_OPTS="$(TARGET_LDFLAGS)" \
+	LIBDIR=lib \
+	PREFIX=/usr \
+	cfg_prefix="$(PKG_INSTALL_DIR)" \
+	cfg_target=/etc/kamailio \
 	group_include="standard" \
 	include_modules="$$(INCL_MODULES) $(EXTRA_MODULES)" \
-	cfg_target=/etc/kamailio/ \
-	lib_target=/usr/lib/kamailio/ \
-	run_target=/var/run/kamailio/ \
-	CFLAGS="$(TARGET_CFLAGS) $(TARGET_CPPFLAGS)" \
-	LD_EXTRA_OPTS="$(TARGET_LDFLAGS)" \
-	LOCALBASE="$(STAGING_DIR)/usr" \
-	SYSBASE="$(STAGING_DIR)/usr" \
-	CROSS_COMPILE=$(TARGET_CROSS) \
-	CC="$(TARGET_CC)" \
-	$(if $(findstring $(call qstrip,$(CONFIG_CPU_TYPE)),$(CPU_MIPS2)),ARCH="mips2",ARCH="$(ARCH)") \
-	DESTDIR=$(PKG_INSTALL_DIR) \
-	quiet=verbose
+	quiet=verbose \
+	run_prefix=""
+
+MAKE_VARS += \
+	PYTHON3=python$(PYTHON3_VERSION)
+
+define Build/Prepare
+	$(call Build/Prepare/Default)
+	# Upstream adds "-funroll-loops" to compiler flags, which increases
+	# binary size significantly. Remove this flag.
+	$(SED) 's/[ ]*-funroll-loops//' $(PKG_BUILD_DIR)/src/Makefile.defs
+endef
 
 define Build/Configure
 endef
 
 define Build/Compile
-	$(MAKE) -C $(PKG_BUILD_DIR) $(PKG_MAKE_ARGS) cfg
-	$(MAKE) -C $(PKG_BUILD_DIR) quiet=verbose all
-	$(MAKE) -C $(PKG_BUILD_DIR) quiet=verbose install
+	$(call Build/Compile/Default,cfg)
+	$(call Build/Compile/Default,all)
 endef
 
 $(eval $(call BuildPackage,kamailio5))
@@ -462,6 +465,7 @@ $(eval $(call BuildKamailio5Module,alias_db,Database-backend aliases,,))
 $(eval $(call BuildKamailio5Module,app_jsdt,Execute JavaScript scripts,,))
 $(eval $(call BuildKamailio5Module,app_lua,Execute embedded Lua scripts,,+liblua))
 $(eval $(call BuildKamailio5Module,app_lua_sr,Old Lua API,,+kamailio5-mod-app-lua,))
+$(eval $(call BuildKamailio5Module,app_python3,Python3 scripting interpreter,,+python3-light))
 $(eval $(call BuildKamailio5Module,app_ruby,Ruby scripting interpreter,,+libruby))
 $(eval $(call BuildKamailio5Module,app_sqlang,Execute Squirrel language scripts,,+libstdcpp))
 $(eval $(call BuildKamailio5Module,async,Asynchronous SIP handling functions,,+kamailio5-mod-tm +kamailio5-mod-tmx))
@@ -506,6 +510,7 @@ $(eval $(call BuildKamailio5Module,dialog,Dialog support,,+kamailio5-mod-rr +kam
 $(eval $(call BuildKamailio5Module,dialplan,Dialplan management,,+libpcre))
 $(eval $(call BuildKamailio5Module,dispatcher,Dispatcher,,))
 $(eval $(call BuildKamailio5Module,diversion,Diversion header insertion,,))
+$(eval $(call BuildKamailio5Module,dlgs,Track active calls in stateless mode,,))
 $(eval $(call BuildKamailio5Module,dmq,Distributed Message Queue,,+kamailio5-mod-sl +kamailio5-mod-tm))
 $(eval $(call BuildKamailio5Module,dmq_usrloc,DMQ USRLOC replication,,+kamailio5-mod-dmq +kamailio5-mod-usrloc))
 $(eval $(call BuildKamailio5Module,domain,Multi-domain support,,))
@@ -585,6 +590,7 @@ $(eval $(call BuildKamailio5Module,pua_rpc,RPC extensions for PUA,,+kamailio5-mo
 $(eval $(call BuildKamailio5Module,pua_usrloc,PUA User Location,,+kamailio5-mod-pua +kamailio5-mod-usrloc))
 $(eval $(call BuildKamailio5Module,pua_xmpp,PUA XMPP,,+kamailio5-mod-presence +kamailio5-mod-pua +kamailio5-mod-xmpp))
 $(eval $(call BuildKamailio5Module,pv,Pseudo-Variables,,))
+$(eval $(call BuildKamailio5Module,pv_headers,Flexible SIP header management,,))
 $(eval $(call BuildKamailio5Module,qos,QoS control,,+kamailio5-mod-dialog))
 $(eval $(call BuildKamailio5Module,ratelimit,Traffic shapping,,))
 $(eval $(call BuildKamailio5Module,regex,Regular Expression,,+libpcre))
